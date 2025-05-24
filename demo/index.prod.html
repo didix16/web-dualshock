@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>web-dualshock demo (prod)</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 2em;
+      }
+      #log {
+        white-space: pre;
+        background: #222;
+        color: #0f0;
+        padding: 1em;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>web-dualshock demo (prod)</h1>
+    <button id="connect">Connect PS4/PS5 controller</button>
+    <div id="log"></div>
+    <script src="./dist/web-dualshock.umd.js"></script>
+    <script>
+      const log = (msg) => {
+        document.getElementById("log").textContent += msg + "\n";
+      };
+      document.getElementById("connect").onclick = async () => {
+        const ds = new window.WebDualShock.DualShock();
+        await ds.init();
+        log("Controller connected. Initial state:");
+        function update() {
+          log(JSON.stringify(ds.state));
+          requestAnimationFrame(update);
+        }
+        update();
+      };
+    </script>
+  </body>
+</html>
