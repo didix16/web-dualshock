@@ -15,14 +15,17 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Enable Corepack and set Yarn Berry (v4)
+        run: |
+          corepack enable
+          corepack prepare yarn@stable --activate
+          yarn set version berry
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "yarn"
-
-      - name: Set Yarn Berry (v4)
-        run: corepack enable && yarn set version berry
 
       - name: Install dependencies
         run: yarn install
