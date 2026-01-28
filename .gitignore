@@ -1,4 +1,4 @@
-.vscode/
+.vscode/*
 .yarn/*
 
 node_modules/

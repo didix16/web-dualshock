@@ -42,10 +42,9 @@ The workflow `.github/workflows/gh-pages.yml` automatically publishes the demo a
 
 ## What works
 
-- Connecting to PS4/PS5 controllers via WebHID and Gamepad API.
+- Connecting to PS4 controllers via WebHID and Gamepad API using USB and Bluetooth.
 - Accessing and controlling lightbar, rumble, and speaker features.
-- Reading gamepad state (buttons, axes, etc.) in real-time.
-- Bluetooth connectivity though webhid
+- Reading gamepad state (buttons, axes, touches, etc.) in real-time.
 - Sending audio to the controller (requires SBC encoding) (Only via bluetooth)
   - The sound can be a little cranky. It's difficult to adjust the SBC packets timing using promises
 

@@ -19,7 +19,7 @@
     "publish:npm": "yarn build && yarn npm publish --access public"
   },
   "homepage": "https://didix16.github.io/web-dualshock/",
-  "description": "TypeScript library to manage PS4/PS5 controllers in the browser using WebHID and the Gamepad API.",
+  "description": "TypeScript library to manage PS4 controllers in the browser using WebHID and the Gamepad API.",
   "main": "dist/web-dualshock.umd.js",
   "module": "dist/web-dualshock.es.js",
   "types": "dist/web-dualshock.d.ts",
