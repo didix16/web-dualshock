@@ -10,12 +10,51 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && yarn tsc --declaration --emitDeclarationOnly --outDir dist && node prepare-types.js",
     "preview": "vite preview",
     "prepare:demo": "node prepare-gh-pages.js",
     "dev:demo": "vite --config vite.config.ts --open demo/index.dev.html",
     "preview:demo": "vite preview --outDir demo --open demo/index.prod.html",
-    "deploy": "yarn build && yarn prepare:demo && yarn gh-pages -d demo"
+    "deploy": "yarn build && yarn prepare:demo && yarn gh-pages -d demo",
+    "publish:npm": "yarn build && yarn npm publish --access public"
   },
-  "homepage": "https://didix16.github.io/web-dualshock/"
+  "homepage": "https://didix16.github.io/web-dualshock/",
+  "description": "TypeScript library to manage PS4/PS5 controllers in the browser using WebHID and the Gamepad API.",
+  "main": "dist/web-dualshock.umd.js",
+  "module": "dist/web-dualshock.es.js",
+  "types": "dist/web-dualshock.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "keywords": [
+    "ps4",
+    "ps5",
+    "dualshock",
+    "webhid",
+    "gamepad",
+    "controller",
+    "typescript",
+    "library",
+    "browser"
+  ],
+  "author": "Dídac Rodríguez <drodriguez816@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/didix16/web-dualshock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/didix16/web-dualshock/issues"
+  },
+  "engines": {
+    "node": ">=18",
+    "yarn": ">=4"
+  },
+  "version": "0.1.0",
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "crc": "^4.3.2"
+  }
 }
