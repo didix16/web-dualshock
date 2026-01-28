@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -9,7 +9,8 @@
         font-family: sans-serif;
         margin: 2em;
       }
-      #log {
+      #log,
+      #log2 {
         white-space: pre;
         background: #222;
         color: #0f0;
@@ -20,19 +21,134 @@
   </head>
   <body>
     <h1>web-dualshock demo (dev)</h1>
-    <button id="connect">Connect PS4/PS5 controller</button>
+    <button id="connect">Connect PS4 controller</button>
+    <p>
+      <!-- color picker-->
+      <label> LED color</label>
+      <input id="colorPicker" type="color" value="#000000" />
+    </p>
+    <p>
+      <label> LED RED </label
+      ><input id="colorRed" type="range" value="0" min="0" max="255" />
+    </p>
+
+    <p>
+      <label> LED GREEN </label
+      ><input id="colorGreen" type="range" value="0" min="0" max="255" />
+    </p>
+    <p>
+      <label> LED BLUE </label
+      ><input id="colorBlue" type="range" value="0" min="0" max="255" />
+    </p>
+    <p>
+      <label>Soft Rumble</label>
+      <input id="softRumble" type="range" value="0" min="0" max="255" />
+    </p>
+    <p>
+      <label>Heavy Rumble</label>
+      <input id="heavyRumble" type="range" value="0" min="0" max="255" />
+    </p>
+    <p>
+      <label> Light blink on </label>
+      <input id="lightBlink" type="range" value="0" min="0" max="255" />
+    </p>
+    <p>
+      <label> Light blink off </label>
+      <input id="lightBlinkOff" type="range" value="0" min="0" max="255" />
+    </p>
+    <p>
+      <label>Music SRC File</label>
+      <input id="musicFile" type="file" accept="audio/*" />
+    </p>
     <div id="log"></div>
+    <pre id="log2"></pre>
     <script type="module">
-      import { DualShock } from "../src/web-dualshock.ts";
+      import "../src/web-dualshock.ts";
       const log = (msg) => {
         document.getElementById("log").textContent += msg + "\n";
       };
+      const log2 = (msg) => {
+        document.getElementById("log2").textContent = msg + "\n";
+      };
+
+      const colorPicker = document.getElementById("colorPicker");
+      const lightbarRed = document.getElementById("colorRed");
+      const lightbarGreen = document.getElementById("colorGreen");
+      const lightbarBlue = document.getElementById("colorBlue");
+      const softRumble = document.getElementById("softRumble");
+      const heavyRumble = document.getElementById("heavyRumble");
+      const lightBlink = document.getElementById("lightBlink");
+      const lightBlinkOff = document.getElementById("lightBlinkOff");
+      const musicFileInput = document.getElementById("musicFile");
+
+      colorPicker.oninput = (ev) => {
+        const color = ev.target.value;
+        console.log("Selected color:", color);
+        const r = parseInt(color.substr(1, 2), 16);
+        const g = parseInt(color.substr(3, 2), 16);
+        const b = parseInt(color.substr(5, 2), 16);
+        ds.lightbar.r = r;
+        ds.lightbar.g = g;
+        ds.lightbar.b = b;
+      };
+
+      lightbarRed.onchange = (ev) => {
+        console.log(ev.target.value);
+        ds.lightbar.r = parseInt(ev.target.value);
+      };
+      lightbarGreen.onchange = (ev) => {
+        console.log(ev.target.value);
+        ds.lightbar.g = parseInt(ev.target.value);
+      };
+      lightbarBlue.onchange = (ev) => {
+        console.log(ev.target.value);
+        ds.lightbar.b = parseInt(ev.target.value);
+      };
+
+      softRumble.onchange = (ev) => {
+        console.log(ev.target.value);
+        ds.rumble.light = parseInt(ev.target.value);
+      };
+
+      heavyRumble.onchange = (ev) => {
+        console.log(ev.target.value);
+        ds.rumble.heavy = parseInt(ev.target.value);
+      };
+
+      lightBlink.onchange = (ev) => {
+        console.log(ev.target.value);
+        ds.lightbar.blinkOn = parseInt(ev.target.value);
+      };
+
+      lightBlinkOff.onchange = (ev) => {
+        console.log(ev.target.value);
+        ds.lightbar.blinkOff = parseInt(ev.target.value);
+      };
+
+      musicFileInput.onchange = (ev) => {
+        const file = ev.target.files[0];
+        console.log("Selected music file:", file.name);
+        ds.setVolume(0x38, 0x38, 0x00, 0x4f);
+        ds.sendMusic(file).catch((e) =>
+          console.error("Error playing music file:", e),
+        );
+      };
+
       document.getElementById("connect").onclick = async () => {
-        const ds = new DualShock();
-        await ds.init();
+        const dm = new DeviceManager();
+        dm.requestDevice();
+
+        let ds = null;
+        dm.$on("deviceconnected", (device) => {
+          log(`Device connected: ${device.getName()}`);
+          device.init();
+          ds = device;
+          window.ds = ds; // Expose for debugging
+        });
+
         log("Controller connected. Initial state:");
         function update() {
-          log(JSON.stringify(ds.state));
+          //if (ds) log2(JSON.stringify(ds.state, null, 2));
           requestAnimationFrame(update);
         }
         update();
