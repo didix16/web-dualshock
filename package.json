@@ -25,12 +25,10 @@
   "types": "dist/web-dualshock.d.ts",
   "files": [
     "dist",
-    "src",
     "README.md"
   ],
   "keywords": [
     "ps4",
-    "ps5",
     "dualshock",
     "webhid",
     "gamepad",
@@ -52,7 +50,7 @@
     "node": ">=18",
     "yarn": ">=4"
   },
-  "version": "0.1.0",
+  "version": "0.1.1",
   "dependencies": {
     "buffer": "^6.0.3",
     "crc": "^4.3.2"
