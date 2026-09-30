@@ -2,6 +2,7 @@
 
 import DeviceManager from "./device-manager";
 export * from "./device-manager";
+export * from "./audio";
 
 declare global {
   interface Window {

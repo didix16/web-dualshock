@@ -9,8 +9,29 @@ node_modules/
 
 #!.yarn/cache
 .pnp.*
-dist/
-!dist/*.js
-!dist/*.d.ts
-demo/dist/
+# Keep the committed bundles and the runtime assets needed beside them.
+/dist/*
+!/dist/*.js
+!/dist/assets/
+!/dist/audio/
+/dist/audio/*
+!/dist/audio/sbc.wasm
+!/dist/audio/LICENSE-libsbc
+!/dist/audio/BUILD.json
+!/dist/THIRD_PARTY_NOTICES.md
+/demo/dist/*
+!/demo/dist/*.js
+!/demo/dist/assets/
+!/demo/dist/audio/
+/demo/dist/audio/*
+!/demo/dist/audio/sbc.wasm
+!/demo/dist/audio/LICENSE-libsbc
+!/demo/dist/audio/BUILD.json
+!/demo/dist/THIRD_PARTY_NOTICES.md
 *.log
+
+# Local audio build/test toolchains (not part of the package)
+.audio-tools/
+.audio-test/
+test-results/
+playwright-report/

@@ -223,6 +223,8 @@ export const defaultState: DualShock5State = {
 
     l2: 0,
     r2: 0,
+    l2State: 0,
+    r2State: 0,
 
     accelX: 0,
     accelY: 0,

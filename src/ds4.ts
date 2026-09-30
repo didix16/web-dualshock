@@ -1,4 +1,6 @@
 import { Buffer } from "buffer";
+import { readSbcInput } from "./audio/sbc";
+import { sendSbc } from "./audio/send-sbc";
 //import crc32 from "crc/crc32";
 import { crc32 as crc } from "./crc.js";
 import {
@@ -50,7 +52,7 @@ export default class DualShock4 {
     if (this.device.opened) return;
 
     // Open the device
-    this.device.open();
+    await this.device.open();
     this.device.oninputreport = (report) =>
       this.processControllerReport(report);
   }
@@ -404,112 +406,27 @@ export default class DualShock4 {
     await this.rumble.setRumbleIntensity(light, heavy);
   }
 
-  /**
-   *
-   * @param musicFile SRC Music file
-   * Given a SRC music file, send over the controller
-   */
-  async sendMusic(musicFile: File) {
-    if (!this.device) {
-      throw new Error(
-        "Controller not initialized. You must call .init() first!",
-      );
-    }
+  private musicPlaying = false;
 
+  /**
+   * Send raw SBC frames over Bluetooth. Convert other audio with audioToSbc().
+   * Resolves after the last packet's nominal duration; rejects on invalid SBC,
+   * concurrent playback, a closed device, or a failed HID write.
+   */
+  async sendMusic(input: File | ArrayBuffer | Uint8Array): Promise<void> {
+    if (!this.device?.opened) {
+      throw new Error("Controller not initialized. You must call .init() first!");
+    }
     if (this.state.interface !== DualShock4Interface.Bluetooth) {
       throw new Error("sendMusic is only supported over Bluetooth");
     }
-
-    const samplingFrequencyTable = [16000, 32000, 44100, 48000];
-    const numberOfBlocksTable = [4, 8, 12, 16];
-    const MONO = 0;
-    const DUAL_CHANNEL = 1;
-    const STEREO = 2;
-    const JOINT_STEREO = 3;
-
-    //read music file
-    const fileReader = new FileReader();
-
-    fileReader.onload = async () => {
-      const sbcDataArray = fileReader.result;
-      const sbcData = Buffer.from(sbcDataArray as ArrayBuffer);
-
-      let frameNumber = 0;
-      let prevFramesSent = frameNumber;
-      let sbcDataSent = 0;
-
-      const msg = Buffer.alloc(527);
-      while (sbcDataSent < sbcData.length) {
-        msg.fill(0);
-        let offset = 0;
-        msg[0] = 0xa2;
-        msg[1] = 0x18;
-        msg[2] = 0x48;
-        msg[3] = 0xa2;
-        offset = 4;
-        msg[offset++] = frameNumber & 0xff;
-        msg[offset++] = (frameNumber >>> 8) & 0xff;
-        msg[offset++] = 0x02;
-
-        const maxSbcDataLengthOffset = 523;
-        let amountOfFrames = 0;
-        do {
-          if (sbcData.readUint8(sbcDataSent) !== 0x9c) {
-            throw new Error("Invalid SBC data");
-          }
-
-          const sbcFrameLengthData = sbcData.readUint8(sbcDataSent + 1);
-          const samplingFrequency =
-            samplingFrequencyTable[(sbcFrameLengthData >>> 6) & 0x03];
-          const numberOfBlocks =
-            numberOfBlocksTable[(sbcFrameLengthData >>> 4) & 0x03];
-          const channelMode = (sbcFrameLengthData >>> 2) & 0x03;
-          const subbands = sbcFrameLengthData & 0x1 ? 8 : 4;
-
-          const bitpool = sbcData.readUint8(sbcDataSent + 2);
-
-          const numberOfChannels = channelMode === MONO ? 1 : 2;
-          const join = channelMode === JOINT_STEREO ? 1 : 0;
-
-          const sbcFrameLength = [MONO, DUAL_CHANNEL].includes(channelMode)
-            ? 4 +
-              (4 * subbands * numberOfChannels) / 8 +
-              Math.ceil((numberOfBlocks * numberOfChannels * bitpool) / 8)
-            : 4 +
-              (4 * subbands * numberOfChannels) / 8 +
-              Math.ceil((join * subbands + numberOfBlocks * bitpool) / 8);
-
-          if (offset + sbcFrameLength >= maxSbcDataLengthOffset) {
-            break;
-          }
-
-          // copy sbcData Frame to msg buffer
-          sbcData.copy(msg, offset, sbcDataSent, sbcDataSent + sbcFrameLength);
-          sbcDataSent += sbcFrameLength;
-          offset += sbcFrameLength;
-          amountOfFrames++;
-        } while (
-          offset < maxSbcDataLengthOffset &&
-          sbcDataSent < sbcData.length
-        );
-
-        const crc32 = crc(msg.subarray(0, 523));
-        msg[523] = crc32[0];
-        msg[524] = crc32[1];
-        msg[525] = crc32[2];
-        msg[526] = crc32[3];
-
-        // Send music data
-        this.device
-          .sendReport(0x18, msg.subarray(2))
-          .catch((e) => console.error(e));
-        await new Promise((resolve) => setTimeout(resolve, 15)); // wait 15ms between packets
-
-        frameNumber = (frameNumber + amountOfFrames) & 0xffff;
-      }
-    };
-
-    fileReader.readAsArrayBuffer(musicFile);
+    if (this.musicPlaying) throw new Error("Music is already playing on this controller");
+    this.musicPlaying = true;
+    try {
+      await sendSbc(this.device, await readSbcInput(input));
+    } finally {
+      this.musicPlaying = false;
+    }
   }
 
   public getName(): string {
