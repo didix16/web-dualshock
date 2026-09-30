@@ -9,6 +9,9 @@ declare global {
     inputReports: ReportFormat[];
     outputReports: ReportFormat[];
     featureReports: ReportFormat[];
+    items: ReportFormat[];
+    reportSize: number;
+    reportCount: number;
   }
 
   interface HIDDevice extends EventTarget {
@@ -38,7 +41,7 @@ declare global {
       addEventListener(
         type: string,
         listener: EventListenerOrEventListenerObject,
-        options?: boolean | AddEventListenerOptions
+        options?: boolean | AddEventListenerOptions,
       ): void;
     };
   }

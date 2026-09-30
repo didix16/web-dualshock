@@ -5,9 +5,10 @@
  * It also provides methods to get a device by its ID or index.
  */
 import DualShock4 from "./ds4";
+import DualSense from "./ds5";
 import Emitter from "./emitter";
 export default class DeviceManager extends Emitter {
-  protected devices: Array<DualShock4> = [];
+  protected devices: Array<DualShock4 | DualSense> = [];
 
   constructor() {
     // High-level API for DualShock 4/5 using WebHID and Gamepad API
@@ -60,7 +61,12 @@ export default class DeviceManager extends Emitter {
               if (devices.length > 0) {
                 const device = devices[0];
                 console.log("DualShock device found:", device);
-                const ds = new DualShock4(device, event.gamepad);
+                let ds = null;
+                if (device.productId === 0x0ce6) {
+                  ds = new DualSense(device, event.gamepad);
+                } else {
+                  ds = new DualShock4(device, event.gamepad);
+                }
                 this.devices.push(ds);
                 this.$emit("deviceconnected", ds);
               } else {
@@ -88,6 +94,7 @@ export default class DeviceManager extends Emitter {
           { vendorId: 0x054c, productId: 0x05c4 },
           { vendorId: 0x054c, productId: 0x09cc },
           { vendorId: 0x054c, productId: 0x05c5 },
+          { vendorId: 0x054c, productId: 0x0ce6 },
           // Razer Raiju
           { vendorId: 0x1532, productId: 0x1000 },
           { vendorId: 0x1532, productId: 0x1007 },
@@ -110,16 +117,21 @@ export default class DeviceManager extends Emitter {
       .then((devices) => {
         if (devices.length > 0) {
           const device = devices[0];
-          console.log("DualShock device found:", device);
-          const ds = new DualShock4(device);
+          console.log("DualShock/DualSense device found:", device);
+          let ds = null;
+          if (device.productId === 0x0ce6) {
+            ds = new DualSense(device);
+          } else {
+            ds = new DualShock4(device);
+          }
           this.devices.push(ds);
           this.$emit("deviceconnected", ds);
         } else {
-          console.error("No DualShock device found");
+          console.error("No DualShock/DualSense device found");
         }
       })
       .catch((error) => {
-        console.error("Failed to request DualShock device:", error);
+        console.error("Failed to request DualShock/DualSense device:", error);
       });
 
     return this;
@@ -129,11 +141,11 @@ export default class DeviceManager extends Emitter {
    * Get the list of connected devices.
    * @returns {Array<DualShock4>} The list of connected devices.
    */
-  getDevices(): Array<DualShock4> {
+  getDevices(): Array<DualShock4 | DualSense> {
     return this.devices;
   }
 
-  getDeviceAtIndex(index: number): DualShock4 | null {
+  getDeviceAtIndex(index: number): DualShock4 | DualSense | null {
     if (index < 0 || index >= this.devices.length) {
       return null;
     }

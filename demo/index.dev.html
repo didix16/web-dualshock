@@ -148,7 +148,7 @@
 
         log("Controller connected. Initial state:");
         function update() {
-          //if (ds) log2(JSON.stringify(ds.state, null, 2));
+          if (ds) log2(JSON.stringify(ds.state, null, 2));
           requestAnimationFrame(update);
         }
         update();
