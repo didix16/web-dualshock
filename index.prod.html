@@ -56,13 +56,32 @@
       <input id="lightBlinkOff" type="range" value="0" min="0" max="255" />
     </p>
     <p>
-      <label>Music SBC File (sounds from speaker)</label>
-      <input id="musicFile" type="file" accept="*" />
+      <label for="musicFile">Audio file (MP3, WAV or SBC)</label>
+      <input id="musicFile" type="file" accept="audio/*,.sbc" />
     </p>
+    <p>
+      <button id="previewAudio" disabled>Listen to converted audio</button>
+      <button id="sendAudio" disabled>Play on PS4 speaker (Bluetooth)</button>
+    </p>
+    <p>
+      <label for="audioBufferAhead">Playback buffer</label>
+      <select id="audioBufferAhead">
+        <option value="0">0 ms (diagnostic comparison)</option>
+        <option value="16">16 ms</option>
+        <option value="32">32 ms</option>
+        <option value="64" selected>64 ms (default)</option>
+      </select>
+    </p>
+    <details id="audioDiagnostics" hidden>
+      <summary>Playback timing (diagnostics)</summary>
+      <pre id="audioTiming"></pre>
+    </details>
+    <p id="audioStatus" role="status">Select an audio file to convert it to SBC.</p>
     <div id="log"></div>
     <pre id="log2"></pre>
     <script src="./dist/web-dualshock.umd.js"></script>
     <script>
+      const { audioToSbc, sbcToAudioBuffer } = WebDualShock;
       const log = (msg) => {
         document.getElementById("log").textContent += msg + "\n";
       };
@@ -79,6 +98,21 @@
       const lightBlink = document.getElementById("lightBlink");
       const lightBlinkOff = document.getElementById("lightBlinkOff");
       const musicFileInput = document.getElementById("musicFile");
+      const previewAudio = document.getElementById("previewAudio");
+      const sendAudio = document.getElementById("sendAudio");
+      const audioStatus = document.getElementById("audioStatus");
+      const audioBufferAhead = document.getElementById("audioBufferAhead");
+      const audioDiagnostics = document.getElementById("audioDiagnostics");
+      const audioTiming = document.getElementById("audioTiming");
+      let ds = null;
+      let sbcData = null;
+      let previewContext = null;
+      const setAudioBusy = (busy) => {
+        musicFileInput.disabled = busy;
+        audioBufferAhead.disabled = busy;
+        previewAudio.disabled = busy || !sbcData;
+        sendAudio.disabled = busy || !sbcData;
+      };
 
       colorPicker.oninput = (ev) => {
         const color = ev.target.value;
@@ -124,26 +158,83 @@
         ds.lightbar.blinkOff = parseInt(ev.target.value);
       };
 
-      musicFileInput.onchange = (ev) => {
-        const file = ev.target.files[0];
-        console.log("Selected music file:", file.name);
-        ds.setVolume(0x38, 0x38, 0x00, 0x4f);
-        ds.sendMusic(file).catch((e) =>
-          console.error("Error playing music file:", e),
-        );
+      musicFileInput.onchange = async () => {
+        const file = musicFileInput.files[0];
+        if (!file) return;
+        sbcData = null;
+        setAudioBusy(true);
+        audioStatus.textContent = "Converting audio?";
+        try {
+          if (previewContext) await previewContext.close();
+          previewContext = null;
+          sbcData = file.name.toLowerCase().endsWith(".sbc")
+            ? new Uint8Array(await file.arrayBuffer())
+            : await audioToSbc(file);
+          audioStatus.textContent = `Ready: ${sbcData.length.toLocaleString()} bytes of SBC.`;
+        } catch (error) {
+          audioStatus.textContent = error.message;
+        } finally {
+          setAudioBusy(false);
+        }
+      };
+
+      previewAudio.onclick = async () => {
+        setAudioBusy(true);
+        try {
+          if (previewContext) await previewContext.close();
+          const context = new AudioContext();
+          previewContext = context;
+          await context.resume();
+          const source = context.createBufferSource();
+          source.buffer = await sbcToAudioBuffer(sbcData);
+          source.connect(context.destination);
+          source.onended = () => {
+            if (previewContext === context) previewContext = null;
+            if (context.state !== "closed") context.close();
+          };
+          source.start();
+          audioStatus.textContent = "Playing decoded SBC in the browser.";
+        } catch (error) {
+          if (previewContext) await previewContext.close();
+          previewContext = null;
+          audioStatus.textContent = error.message;
+        } finally {
+          setAudioBusy(false);
+        }
+      };
+
+      sendAudio.onclick = async () => {
+        setAudioBusy(true);
+        audioDiagnostics.hidden = true;
+        audioTiming.textContent = "";
+        try {
+          if (!ds || typeof ds.sendMusic !== "function") {
+            throw new Error("Connect a PS4 controller over Bluetooth first.");
+          }
+          await ds.setVolume(0x38, 0x38, 0x00, 0x4f);
+          audioStatus.textContent = "Playing on the controller...";
+          await ds.sendMusic(sbcData, { bufferAheadMs: Number(audioBufferAhead.value) });
+          audioTiming.textContent = JSON.stringify(ds.getAudioPlaybackStats(),
+            (key, value) => typeof value === "number" ? Math.round(value * 100) / 100 : value, 2);
+          audioDiagnostics.hidden = false;
+          audioDiagnostics.open = true;
+          audioStatus.textContent = "Controller playback finished.";
+        } catch (error) {
+          audioStatus.textContent = error.message;
+        } finally {
+          setAudioBusy(false);
+        }
       };
 
       document.getElementById("connect").onclick = async () => {
         const dm = new DeviceManager();
-        dm.requestDevice();
-
-        let ds = null;
-        dm.$on("deviceconnected", (device) => {
+        dm.$on("deviceconnected", async (device) => {
           log(`Device connected: ${device.getName()}`);
-          device.init();
+          await device.init();
           ds = device;
           window.ds = ds; // Expose for debugging
         });
+        dm.requestDevice();
 
         log("Controller connected. Initial state:");
         function update() {

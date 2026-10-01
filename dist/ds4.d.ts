@@ -1,3 +1,4 @@
+import type { SbcPlaybackOptions, SbcPlaybackStats } from "./audio/send-sbc";
 import { DualShock4State } from "./ds4state";
 import LightbarDevice from "./lightbar";
 import RumbleDevice from "./rumble";
@@ -65,11 +66,15 @@ export default class DualShock4 {
      * @param heavy 0 - 255
      */
     setRumbleIntensity(light: number, heavy: number): Promise<void>;
+    private musicPlaying;
+    private audioPlaybackStats?;
+    /** Timing of the last successful playback; undefined during playback or after failure. */
+    getAudioPlaybackStats(): SbcPlaybackStats | undefined;
     /**
-     *
-     * @param musicFile SRC Music file
-     * Given a SRC music file, send over the controller
+     * Send raw SBC frames over Bluetooth. Convert other audio with audioToSbc().
+     * Resolves after the last packet's nominal duration; rejects on invalid SBC,
+     * concurrent playback, a closed device, or a failed HID write.
      */
-    sendMusic(musicFile: File): Promise<void>;
+    sendMusic(input: File | ArrayBuffer | Uint8Array, options?: SbcPlaybackOptions): Promise<void>;
     getName(): string;
 }
