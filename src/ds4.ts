@@ -1,6 +1,7 @@
 import { Buffer } from "buffer";
 import { readSbcInput } from "./audio/sbc";
-import { sendSbc } from "./audio/send-sbc";
+import type { SbcPlaybackOptions, SbcPlaybackStats } from "./audio/send-sbc";
+import { sendSbcWithTransport } from "./audio/playback";
 //import crc32 from "crc/crc32";
 import { crc32 as crc } from "./crc.js";
 import {
@@ -68,10 +69,13 @@ export default class DualShock4 {
     const { data } = report;
     this.lastReport = data.buffer as ArrayBuffer;
 
-    //this.miscData = `Data:\n${buf2hex(data.buffer.slice(10))}\n\nString:\n${buf2str(data.buffer.slice(10))}`
-    this.miscData = `HID:\n${buf2view(
-      data.buffer.slice(0, 9) as ArrayBuffer,
-    )}\n\nData:\n${buf2view(data.buffer.slice(10) as ArrayBuffer)}`;
+    // Raw input and gamepad state remain live during playback. Avoid formatting
+    // diagnostic strings on every report while audio needs timely HID writes.
+    if (!this.musicPlaying) {
+      this.miscData = `HID:\n${buf2view(
+        data.buffer.slice(0, 9) as ArrayBuffer,
+      )}\n\nData:\n${buf2view(data.buffer.slice(10) as ArrayBuffer)}`;
+    }
 
     // Interface is unknown
     if (this.state.interface === DualShock4Interface.Disconnected) {
@@ -79,7 +83,10 @@ export default class DualShock4 {
         this.state.interface = DualShock4Interface.USB;
       } else {
         this.state.interface = DualShock4Interface.Bluetooth;
-        this.device!.receiveFeatureReport(0x02);
+        // Enable the full Bluetooth input reports once during detection.
+        this.device.receiveFeatureReport(0x02).catch((error) =>
+          console.error("Failed to enable full DS4 Bluetooth reports", error),
+        );
         return;
       }
       // Player 1 Color
@@ -101,7 +108,6 @@ export default class DualShock4 {
       report.reportId === 0x11
     ) {
       this.updateState(new DataView(data.buffer, 2));
-      this.device!.receiveFeatureReport(0x02);
     }
   }
 
@@ -407,13 +413,19 @@ export default class DualShock4 {
   }
 
   private musicPlaying = false;
+  private audioPlaybackStats?: SbcPlaybackStats;
+
+  /** Timing of the last successful playback; undefined during playback or after failure. */
+  getAudioPlaybackStats(): SbcPlaybackStats | undefined {
+    return this.audioPlaybackStats ? { ...this.audioPlaybackStats } : undefined;
+  }
 
   /**
    * Send raw SBC frames over Bluetooth. Convert other audio with audioToSbc().
    * Resolves after the last packet's nominal duration; rejects on invalid SBC,
    * concurrent playback, a closed device, or a failed HID write.
    */
-  async sendMusic(input: File | ArrayBuffer | Uint8Array): Promise<void> {
+  async sendMusic(input: File | ArrayBuffer | Uint8Array, options: SbcPlaybackOptions = {}): Promise<void> {
     if (!this.device?.opened) {
       throw new Error("Controller not initialized. You must call .init() first!");
     }
@@ -422,8 +434,9 @@ export default class DualShock4 {
     }
     if (this.musicPlaying) throw new Error("Music is already playing on this controller");
     this.musicPlaying = true;
+    this.audioPlaybackStats = undefined;
     try {
-      await sendSbc(this.device, await readSbcInput(input));
+      this.audioPlaybackStats = await sendSbcWithTransport(this.device, await readSbcInput(input), options);
     } finally {
       this.musicPlaying = false;
     }

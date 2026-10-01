@@ -15,35 +15,37 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Enable Corepack and set Yarn Berry (v4)
-        run: |
-          corepack enable
-          corepack prepare yarn@stable --activate
-          yarn set version berry
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: "yarn"
+
+      - name: Enable the project-pinned Yarn version
+        id: yarn
+        run: |
+          corepack enable
+          yarn --version
+          echo "cache-dir=$(yarn config get cacheFolder)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Yarn packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.yarn.outputs.cache-dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock', 'package.json') }}
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Build project
         run: yarn build
         env:
           GITHUB_PAGES: "true"
 
-      - name: Prepare gh-pages folder
-        run: |
-          rm -rf gh-pages
-          mkdir gh-pages
-          cp -r demo/* gh-pages/
-          cp -r dist gh-pages/
+      - name: Prepare demo for GitHub Pages
+        run: yarn prepare:demo
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./gh-pages
+          publish_dir: ./demo

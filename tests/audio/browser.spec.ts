@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import type * as AudioApi from "../../src/audio";
 
 declare global {
@@ -136,9 +136,253 @@ test("development demo converts and previews without requiring a controller", as
   test.skip(info.project.name !== "source", "UI test uses the development demo");
   await page.goto("/demo/index.dev.html");
   await page.locator("#musicFile").setInputFiles("tests/audio/fixtures/tone.mp3");
+  await expect(page.locator("#audioBufferAhead")).toHaveValue("64");
   await expect(page.locator("#audioStatus")).toContainText("Ready:");
   await page.getByRole("button", { name: "Listen to converted audio" }).click();
   await expect(page.locator("#audioStatus")).toContainText("Playing decoded SBC");
   await page.getByRole("button", { name: "Play on PS4 speaker" }).click();
   await expect(page.locator("#audioStatus")).toContainText("Connect a PS4 controller");
+});
+
+test("HID events sustain playback with timers artificially delayed to one second", async ({ page }) => {
+  const stats = await page.evaluate(async () => {
+    const sbc = await window.audioApi.audioToSbc(new AudioBuffer({
+      sampleRate: 32000, numberOfChannels: 2, length: 16000 - 80,
+    }));
+    const device = Object.assign(new EventTarget(), {
+      productId: 0x09cc, productName: "Test DS4", opened: false,
+      oninputreport: null as any,
+      async open() { this.opened = true; },
+      async receiveFeatureReport() { return new DataView(new ArrayBuffer(37)); },
+      async sendReport() {},
+    });
+    Object.defineProperty(navigator, "hid", {
+      configurable: true, value: { requestDevice: async () => [device] },
+    });
+    const manager = new window.DeviceManager();
+    const connected = new Promise<any>(resolve => manager.$on("deviceconnected", resolve));
+    manager.requestDevice();
+    const controller = await connected;
+    await controller.init();
+    device.oninputreport({ device, reportId: 0x01, data: new DataView(new ArrayBuffer(9)), timeStamp: performance.now() });
+    const originalTimeout = window.setTimeout;
+    // The input source uses a separate interval. This models device events;
+    // it does not claim that intervals evade real browser background throttling.
+    const input = window.setInterval(() => device.dispatchEvent(new Event("inputreport")), 8);
+    window.setTimeout = ((callback: TimerHandler, delay?: number, ...args: any[]) =>
+      originalTimeout(callback, Math.max(1000, delay ?? 0), ...args)) as typeof window.setTimeout;
+    try {
+      await controller.sendMusic(sbc);
+      return controller.getAudioPlaybackStats();
+    } finally {
+      window.setTimeout = originalTimeout;
+      window.clearInterval(input);
+      window.audioApi.disposeSbcCodec();
+    }
+  });
+  expect(stats.audioDurationMs).toBe(500);
+  expect(stats.packetsSent).toBe(32);
+  expect(stats.inputReportWakeups).toBeGreaterThan(20);
+  expect(stats.timerWakeups).toBe(0);
+  expect(stats.elapsedMs).toBeLessThan(1000);
+});
+
+test("development demo sends audio and displays timing with the selected reserve", async ({ page }, info) => {
+  test.skip(info.project.name !== "source", "UI test uses the development demo");
+  await page.goto("/demo/index.dev.html");
+  await page.evaluate(() => {
+    const device = {
+      productId: 0x09cc, productName: "Test DS4", opened: false,
+      async open() { this.opened = true; },
+      async receiveFeatureReport() { return new DataView(new ArrayBuffer(37)); },
+      async sendReport() {},
+      set oninputreport(handler: (event: unknown) => void) {
+        queueMicrotask(() => handler({
+          device: this, reportId: 0x01, data: new DataView(new ArrayBuffer(9)), timeStamp: performance.now(),
+        }));
+      },
+    };
+    Object.defineProperty(navigator, "hid", {
+      configurable: true, value: { requestDevice: async () => [device] },
+    });
+  });
+  await page.getByRole("button", { name: "Connect PS4 controller" }).click();
+  await expect(page.locator("#log")).toContainText("Device connected: Test DS4");
+  await page.locator("#musicFile").setInputFiles("tests/audio/fixtures/tone.mp3");
+  await expect(page.locator("#audioStatus")).toContainText("Ready:");
+  await page.locator("#audioBufferAhead").selectOption("16");
+  await page.getByRole("button", { name: "Play on PS4 speaker" }).click();
+  await expect(page.locator("#audioStatus")).toContainText("Controller playback finished");
+  await expect(page.locator("#audioTiming")).toBeVisible();
+  const stats = JSON.parse(await page.locator("#audioTiming").innerText());
+  expect(stats.bufferAheadMs).toBe(16);
+  expect(stats.packetsSent).toBeGreaterThan(1);
+  expect(stats.audioDurationMs).toBeGreaterThan(100);
+  expect(stats.elapsedMs).toBeGreaterThanOrEqual(stats.audioDurationMs);
+  expect(stats.maxTimerDelayMs).toBeGreaterThanOrEqual(0);
+  expect(stats.maxWriteDurationMs).toBeGreaterThanOrEqual(0);
+  await expect(page.locator("#audioBufferAhead")).toBeEnabled();
+});
+
+// Only replace the device boundary. The real bundled worker, transport,
+// MessageEvents, packetizer and timers execute in Chromium in every format.
+async function mockPlaybackWorker(page: Page, mode: "slow-timers" | "open-error" | "write-error") {
+  await page.route("**/*playback.worker*", async route => {
+    if (route.request().url().includes("worker&url")) return route.continue();
+    const response = await route.fetch();
+    const prelude = `
+      const writeTimes = [];
+      let inputInterval;
+      const fakeDevice = Object.assign(new EventTarget(), {
+        vendorId: 0x054c, productId: 0x09cc, productName: "Worker test DS4", collections: [], opened: false,
+        async open() {
+          if (${JSON.stringify(mode)} === "open-error") throw new Error("Simulated worker open failure");
+          this.opened = true;
+          inputInterval = setInterval(() => this.dispatchEvent(new Event("inputreport")), 8);
+        },
+        async close() {
+          this.opened = false;
+          clearInterval(inputInterval);
+          postMessage({ type: "test-trace", writeTimes, closed: true });
+        },
+        async sendReport(id, data) {
+          if (id !== 0x18 || data[1] !== 0xa0) throw new Error("Unexpected speaker report");
+          writeTimes.push(performance.timeOrigin + performance.now());
+          if (writeTimes.length === 1) postMessage({ type: "test-first-write" });
+          if (${JSON.stringify(mode)} === "write-error" && writeTimes.length === 3) throw new Error("Simulated HID write failure");
+        },
+      });
+      Object.defineProperty(navigator, "hid", { value: { getDevices: async () => [fakeDevice] } });
+      if (${JSON.stringify(mode)} === "slow-timers") {
+        const nativeTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = (callback, delay, ...args) => nativeTimeout(callback, Math.max(1000, delay || 0), ...args);
+      }
+    `;
+    await route.fulfill({ response, body: prelude + await response.text() });
+  });
+}
+
+async function prepareWorkerPlaybackTest(page: Page, blockMainThread = false) {
+  await page.evaluate(async block => {
+    const state = (window as any).playbackTest = { mainWrites: 0, trace: null, blockStart: 0, blockEnd: 0 };
+    const device = Object.assign(new EventTarget(), {
+      vendorId: 0x054c, productId: 0x09cc, productName: "Worker test DS4", collections: [], opened: false,
+      oninputreport: null as any,
+      async open() { this.opened = true; },
+      async receiveFeatureReport() { return new DataView(new ArrayBuffer(37)); },
+      async sendReport() { state.mainWrites++; },
+    });
+    state.device = device;
+    state.devices = [device];
+    Object.defineProperty(navigator, "hid", { configurable: true, value: {
+      requestDevice: async () => [device], getDevices: async () => state.devices,
+    } });
+    const manager = new window.DeviceManager();
+    const connected = new Promise<any>(resolve => manager.$on("deviceconnected", resolve));
+    manager.requestDevice();
+    state.controller = await connected;
+    await state.controller.init();
+    device.oninputreport({ device, reportId: 1, data: new DataView(new ArrayBuffer(9)), timeStamp: performance.now() });
+    state.sbc = await window.audioApi.audioToSbc(new AudioBuffer({
+      sampleRate: 32000, numberOfChannels: 2, length: 32000 - 80,
+    }));
+    window.audioApi.disposeSbcCodec();
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        this.addEventListener("message", ({ data }) => {
+          if (data.type === "test-trace") state.trace = data;
+          if (block && data.type === "test-first-write") {
+            state.blockStart = performance.timeOrigin + performance.now();
+            const end = performance.now() + 350;
+            while (performance.now() < end) { /* deliberate main-thread stall */ }
+            state.blockEnd = performance.timeOrigin + performance.now();
+          }
+        });
+      }
+    };
+  }, blockMainThread);
+}
+
+test("direct HID worker keeps sending during a blocked page and delayed worker timers", async ({ page }) => {
+  await mockPlaybackWorker(page, "slow-timers");
+  await prepareWorkerPlaybackTest(page, true);
+  const result = await page.evaluate(async () => {
+    const state = (window as any).playbackTest;
+    const before = state.sbc.slice();
+    await state.controller.sendMusic(state.sbc);
+    return {
+      stats: state.controller.getAudioPlaybackStats(), mainWrites: state.mainWrites,
+      trace: state.trace, blockStart: state.blockStart, blockEnd: state.blockEnd,
+      originalIntact: state.sbc.length === before.length && before.every((v: number, i: number) => state.sbc[i] === v),
+      mainConnectionOpen: state.device.opened,
+    };
+  });
+  expect(result.stats.transport).toBe("worker");
+  expect(result.stats.bufferAheadMs).toBe(64);
+  expect(result.stats.workerFallbackReason).toBeUndefined();
+  expect(result.stats.audioDurationMs).toBe(1000);
+  expect(result.stats.packetsSent).toBe(63);
+  expect(result.stats.inputReportWakeups).toBeGreaterThan(50);
+  expect(result.stats.timerWakeups).toBe(0);
+  expect(result.mainWrites).toBe(0);
+  expect(result.originalIntact && result.mainConnectionOpen && result.trace.closed).toBe(true);
+  expect(result.blockEnd - result.blockStart).toBeGreaterThanOrEqual(350);
+  const sentWhileBlocked = result.trace.writeTimes.filter((time: number) => time > result.blockStart && time < result.blockEnd);
+  expect(sentWhileBlocked.length).toBeGreaterThan(10);
+  await expect.poll(() => page.workers().length).toBe(0);
+});
+
+test("worker setup failure falls back before playback and records the reason", async ({ page }) => {
+  await mockPlaybackWorker(page, "open-error");
+  await prepareWorkerPlaybackTest(page);
+  const result = await page.evaluate(async () => {
+    const state = (window as any).playbackTest;
+    await state.controller.sendMusic(state.sbc);
+    return { stats: state.controller.getAudioPlaybackStats(), writes: state.mainWrites };
+  });
+  expect(result.stats.transport).toBe("main-thread");
+  expect(result.stats.workerFallbackReason).toContain("Simulated worker open failure");
+  expect(result.writes).toBe(63);
+  await expect.poll(() => page.workers().length).toBe(0);
+});
+
+test("worker write failure closes its connection and never replays partial audio on the page", async ({ page }) => {
+  await mockPlaybackWorker(page, "write-error");
+  await prepareWorkerPlaybackTest(page);
+  const result = await page.evaluate(async () => {
+    const state = (window as any).playbackTest;
+    let error = "";
+    try { await state.controller.sendMusic(state.sbc); } catch (e) { error = String(e); }
+    const afterFailure = { error, writes: state.mainWrites, stats: state.controller.getAudioPlaybackStats(), trace: state.trace };
+    await state.controller.sendMusic(state.sbc, { transport: "main-thread" });
+    return { ...afterFailure, retryWrites: state.mainWrites };
+  });
+  expect(result.error).toContain("Simulated HID write failure");
+  expect(result.writes).toBe(0);
+  expect(result.stats).toBeUndefined();
+  expect(result.trace.closed).toBe(true);
+  expect(result.trace.writeTimes).toHaveLength(3);
+  expect(result.retryWrites).toBe(63);
+  await expect.poll(() => page.workers().length).toBe(0);
+});
+
+test("indistinguishable controllers are never selected arbitrarily for worker playback", async ({ page }) => {
+  await prepareWorkerPlaybackTest(page);
+  const result = await page.evaluate(async () => {
+    const state = (window as any).playbackTest;
+    state.devices.push({ ...state.device });
+    let error = "";
+    try { await state.controller.sendMusic(state.sbc, { transport: "worker" }); } catch (e) { error = String(e); }
+    const writesBeforeFallback = state.mainWrites;
+    await state.controller.sendMusic(state.sbc);
+    return { error, writesBeforeFallback, stats: state.controller.getAudioPlaybackStats(), writes: state.mainWrites };
+  });
+  expect(result.error).toContain("unique controller");
+  expect(result.writesBeforeFallback).toBe(0);
+  expect(result.stats.transport).toBe("main-thread");
+  expect(result.stats.workerFallbackReason).toContain("unique controller");
+  expect(result.writes).toBe(63);
+  expect(page.workers()).toHaveLength(0);
 });

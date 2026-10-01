@@ -223,6 +223,79 @@ audio duration; there is no hardware acknowledgment of audible completion.
 It validates the complete input before sending any audio. CRC protects SBC
 headers and scale factors, not every compressed audio bit.
 
+HID packets and their CRC are prepared before the playback clock starts to
+reduce work between writes (about 2 MB of prepared packets per minute at the
+default profile). Bluetooth setup requests are not repeated for every input
+report. Controller state stays live during playback, while diagnostic hex
+formatting and the development demo's state display are paused.
+
+By default, `sendMusic` opens a separate WebHID connection in a dedicated
+playback worker and transfers its private SBC snapshot there. Packet preparation,
+timers, input wake-ups and HID writes all run in that worker; no per-packet
+messages or acknowledgments from the page are required. The page's original
+connection remains open for controller state and effects. The playback worker
+closes its connection and terminates when playback finishes or fails.
+
+This requires WebHID in dedicated workers (Chromium added it in Chrome 131).
+If worker setup fails **before audio is submitted**, `transport: "auto"` uses
+the original connection instead and records `workerFallbackReason`. A failure
+after submission rejects the promise without replaying audio on the page.
+WebHID exposes no transferable device handle or serial number: worker selection
+requires a unique match by vendor, product, name and report collections in both
+contexts. Multiple indistinguishable controllers use the selected page device
+instead; the library never picks an arbitrary matching controller.
+
+Playback gradually builds a small send-ahead reserve (64 ms by default) to
+absorb short scheduling delays. Writes remain serial, the reserve is bounded,
+and the steady-state rate follows the SBC sample count. After a delay exhausts
+the estimated reserve, the sender rebuilds it without skipping audio frames
+or sending an unlimited catch-up burst. The promise also waits for the queued
+tail. This estimate cannot measure the controller's actual buffer or clock;
+Bluetooth delivery and audible playback still need testing on hardware.
+
+```ts
+await ds.sendMusic(sbc, { bufferAheadMs: 64, transport: "auto" });
+console.log(ds.getAudioPlaybackStats());
+// transport: "worker" requires worker playback and rejects if setup fails.
+// transport: "main-thread" is available for comparisons.
+// bufferAheadMs: 0–64 ms; 0 disables send-ahead.
+```
+
+The demo offers the same buffer setting and displays **Playback timing** after
+completion. `maxTimerDelayMs` measures late timer wake-ups, `maxWriteDurationMs`
+measures time awaiting WebHID, and `maxSchedulingDelayMs` includes either cause
+of a late submission. `maxReportGapMs` is the longest interval between writes.
+`estimatedStarvations` counts completed writes arriving after the estimated end
+of queued audio; it is **not** a count of confirmed audible cuts. These host-side
+measurements cannot detect Bluetooth packet loss or controller buffer overflow.
+Diagnostics are a snapshot of the last successful playback, and are cleared
+when another playback starts (including one that subsequently fails).
+`transport` identifies the actual execution context (`worker` or `main-thread`).
+`elapsedMs` is measured by that context from the prepared packets to the final
+drain; it excludes worker setup and delayed delivery of the result to the page.
+
+During playback, incoming HID reports can also wake a due packet. This avoids
+depending solely on `setTimeout`, which Chromium can throttle to one-second
+intervals when the page is hidden. Speaker packets use inbound mode `0xA0` to
+keep ordinary controller input enabled, with the existing 8 ms input interval.
+An input report never triggers an early packet: the SBC deadlines and bounded
+reserve still control the sending rate. Timers remain a fallback if input stops,
+and the extra input listener is removed on completion or error.
+
+`inputReportWakeups` and `timerWakeups` show which source woke the sender (including
+the final drain wait). `maxTimerDelayMs` measures only timer wake-ups; use
+`maxSchedulingDelayMs` to assess late writes regardless of the wake source.
+Worker playback isolates the sender from main-thread stalls; it does not exempt
+the browser from background timer throttling or suspension. Continued delivery
+of input events still matters. A frozen worker, a sleeping computer, or a blocked
+main thread when using the fallback transport can interrupt playback. Increasing
+the reserve cannot cover second-long suspensions. Check the transport and timing
+diagnostics on your controller after switching tabs or minimizing the window.
+
+Transport references: [Chrome timer throttling](https://developer.chrome.com/blog/timer-throttling-in-chrome-88/)
+and [DS4 input mode observations in DS4Windows](https://github.com/hbashton/DS4Windows/blob/main/DS4Windows/DS4Control/DualShock4BluetoothAudioProtocol.cs).
+Worker support: [Chromium's WebHID worker announcement](https://groups.google.com/a/chromium.org/g/blink-dev/c/0fsOSvHrxf4).
+
 The complete input is decoded in memory before playback. Conversion is not a
 streaming API; long recordings require proportionally more memory. Encoding
 preserves the filter tail and pads the last frame. Raw SBC has no original-length
@@ -237,7 +310,9 @@ Run `yarn build` and distribute **all of `dist/`**, keeping `assets/` and `audio
 next to the JS bundles. URLs resolve relative to the bundle, including when
 hosted in a subdirectory. The worker and WASM load only on the first conversion;
 sending existing SBC does not start the codec. Serve over HTTP(S), not file URLs.
-The default worker must be served from the same origin as the page.
+The workers must be served from the same origin as the page. Sending SBC lazily
+loads `assets/playback.worker-*.js`; it is separate from the codec worker and is
+released after each playback. Include both generated worker files when deploying.
 
 For UMD script usage, exports are available on `WebDualShock`:
 
@@ -263,6 +338,15 @@ configureSbcCodec({
 // Later, release the worker and WASM memory (rejects pending worker jobs).
 disposeSbcCodec();
 // The next conversion loads the codec again.
+```
+
+If you also relocate the playback worker, pass its URL when sending:
+
+```ts
+await ds.sendMusic(sbc, {
+  workerURL: "/audio/playback-worker.js", // copy/rename assets/playback.worker-*.js
+  transport: "worker",
+});
 ```
 
 For a Content Security Policy, allow the worker origin (`worker-src`) and

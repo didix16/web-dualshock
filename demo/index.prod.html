@@ -63,6 +63,19 @@
       <button id="previewAudio" disabled>Listen to converted audio</button>
       <button id="sendAudio" disabled>Play on PS4 speaker (Bluetooth)</button>
     </p>
+    <p>
+      <label for="audioBufferAhead">Playback buffer</label>
+      <select id="audioBufferAhead">
+        <option value="0">0 ms (diagnostic comparison)</option>
+        <option value="16">16 ms</option>
+        <option value="32">32 ms</option>
+        <option value="64" selected>64 ms (default)</option>
+      </select>
+    </p>
+    <details id="audioDiagnostics" hidden>
+      <summary>Playback timing (diagnostics)</summary>
+      <pre id="audioTiming"></pre>
+    </details>
     <p id="audioStatus" role="status">Select an audio file to convert it to SBC.</p>
     <div id="log"></div>
     <pre id="log2"></pre>
@@ -88,11 +101,15 @@
       const previewAudio = document.getElementById("previewAudio");
       const sendAudio = document.getElementById("sendAudio");
       const audioStatus = document.getElementById("audioStatus");
+      const audioBufferAhead = document.getElementById("audioBufferAhead");
+      const audioDiagnostics = document.getElementById("audioDiagnostics");
+      const audioTiming = document.getElementById("audioTiming");
       let ds = null;
       let sbcData = null;
       let previewContext = null;
       const setAudioBusy = (busy) => {
         musicFileInput.disabled = busy;
+        audioBufferAhead.disabled = busy;
         previewAudio.disabled = busy || !sbcData;
         sendAudio.disabled = busy || !sbcData;
       };
@@ -188,13 +205,19 @@
 
       sendAudio.onclick = async () => {
         setAudioBusy(true);
+        audioDiagnostics.hidden = true;
+        audioTiming.textContent = "";
         try {
           if (!ds || typeof ds.sendMusic !== "function") {
             throw new Error("Connect a PS4 controller over Bluetooth first.");
           }
           await ds.setVolume(0x38, 0x38, 0x00, 0x4f);
-          audioStatus.textContent = "Playing on the controller?";
-          await ds.sendMusic(sbcData);
+          audioStatus.textContent = "Playing on the controller...";
+          await ds.sendMusic(sbcData, { bufferAheadMs: Number(audioBufferAhead.value) });
+          audioTiming.textContent = JSON.stringify(ds.getAudioPlaybackStats(),
+            (key, value) => typeof value === "number" ? Math.round(value * 100) / 100 : value, 2);
+          audioDiagnostics.hidden = false;
+          audioDiagnostics.open = true;
           audioStatus.textContent = "Controller playback finished.";
         } catch (error) {
           audioStatus.textContent = error.message;
